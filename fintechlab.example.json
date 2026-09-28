@@ -1,0 +1,17 @@
+{
+    "_comment": [
+        "Copy to fintechlab.json beside your runner (or name it with FINTECHLAB_CONFIG).",
+        "Every field is optional. The environment wins over the four addresses:",
+        "FINTECH_SIM_LAB_CONSOLE_URL, FINTECH_SIM_LAB_CLOCK_URL, RUNNER_ADVERTISED_URL, RUNNER_BROWSE_URL.",
+        "stand_ins: per lab stand-in, connected (its vendor wiring live) and shown (its card visible).",
+        "An absent id or field leaves it as the lab has it. Keys starting with _ are comments."
+    ],
+    "console_url": "http://127.0.0.1:8090",
+    "clock_url": "http://127.0.0.1:8096/clock",
+    "advertised_url": "http://host.containers.internal:3109",
+    "browse_url": "http://127.0.0.1:3109",
+    "stand_ins": {
+        "receiver": { "connected": false, "shown": false },
+        "settlement": { "connected": false, "shown": true }
+    }
+}

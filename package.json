@@ -1,0 +1,41 @@
+{
+    "name": "@fintechlab/runner",
+    "version": "0.1.0",
+    "description": "Be a platform in the fintech sim lab: register a console card, follow the lab clock, serve activity logs, supervise processes.",
+    "license": "UNLICENSED",
+    "private": true,
+    "type": "commonjs",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        },
+        "./clock-shim": {
+            "types": "./clock-shim/index.d.ts",
+            "default": "./clock-shim/index.cjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist",
+        "src",
+        "clock-shim",
+        "fintechlab.example.json",
+        "README.md"
+    ],
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "build": "rm -rf dist && tsc -p tsconfig.json",
+        "typecheck": "tsc -p tsconfig.test.json --noEmit",
+        "test": "rm -rf build-test && tsc -p tsconfig.test.json && node --test 'build-test/test/**/*.test.js'",
+        "prepare": "npm run build"
+    },
+    "devDependencies": {
+        "@types/node": "^22.19.0",
+        "typescript": "~5.9.3"
+    }
+}
