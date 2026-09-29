@@ -6,6 +6,7 @@
  *   clock       LabClockFollower: follow GET /clock into the shim's file; hold the clock
  *   activity    ActivityLog: logs in the lab's activity shape
  *   config      loadLabConfig(): fintechlab.json + env
+ *   files       FileStore, uploadHandler, previewHandler: settlement files from anywhere
  *   http        readBody, json, a route table for the control server
  *   supervise   Supervisor: child processes with prefixed output; port checks
  *   wait        waitFor, pollFor
@@ -18,6 +19,7 @@ export * from './activity';
 export * from './clock';
 export * from './config';
 export * from './descriptor';
+export * from './files';
 export * from './http';
 export * from './plugin';
 export * from './supervise';

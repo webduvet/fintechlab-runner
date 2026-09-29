@@ -45,6 +45,14 @@ export interface PluginSettlement {
     run_path: string;
     /** GET: what is running and how the last run went. */
     status_path?: string;
+    /**
+     * POST ?name=<file name> with the raw bytes: take a file from anywhere
+     * and list it with the rest; DELETE ?name= removes one it took.
+     * FileStore and uploadHandler() implement it.
+     */
+    upload_path?: string;
+    /** GET ?name=&lines=: the head of a file. previewHandler(). */
+    preview_path?: string;
     /** The activity log whose total is the diagram's "runs". */
     runs_log?: string;
     /** The diagram's arrows mapped to the platform's own stage names. */
@@ -205,6 +213,8 @@ export function descriptorProblems(p: Plugin, reservedIds: readonly string[] = L
         add(pathProblem('settlement.files_path', s.files_path, true));
         add(pathProblem('settlement.run_path', s.run_path, true));
         add(pathProblem('settlement.status_path', s.status_path, false));
+        add(pathProblem('settlement.upload_path', s.upload_path, false));
+        add(pathProblem('settlement.preview_path', s.preview_path, false));
         if (s.runs_log !== undefined && s.runs_log !== '' && !LOG_NAME.test(s.runs_log)) {
             add(`settlement.runs_log "${s.runs_log}" is not a log name`);
         }
