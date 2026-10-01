@@ -60,6 +60,54 @@ describe('descriptor', () => {
         assert.ok(problems.some((m) => m.includes('at most 8 actions')));
     });
 
+    it('accepts action fields and refuses malformed ones', () => {
+        const p = good();
+        p.actions = [
+            {
+                id: 'seed',
+                label: 'Seed',
+                path: '/seed',
+                fields: [
+                    { id: 'merchants', label: 'Merchants', type: 'number', default: 50, min: 1, max: 5000 },
+                    { id: 'dir', label: 'Write to', type: 'text', placeholder: '.runs/generated' },
+                    {
+                        id: 'mode',
+                        label: 'Mode',
+                        type: 'select',
+                        default: 'add',
+                        options: [
+                            { value: 'add', label: 'Add' },
+                            { value: 'reseed', label: 'Reseed' },
+                        ],
+                    },
+                ],
+            },
+        ];
+        assert.deepEqual(descriptorProblems(p), []);
+
+        p.actions[0]!.fields = [
+            { id: 'Bad-Id', label: '', type: 'number', min: 5, max: 1 },
+            { id: 'n', label: 'N', type: 'number', default: 'ten' as unknown as number },
+            { id: 'pick', label: 'Pick', type: 'select', default: 'z', options: [{ value: 'a', label: 'A' }] },
+            { id: 'empty', label: 'Empty', type: 'select', options: [] },
+            { id: 'when', label: 'When', type: 'date' as 'text' },
+        ];
+        const problems = descriptorProblems(p).join('\n');
+        for (const expected of [
+            'field id "Bad-Id"',
+            'field Bad-Id needs a label',
+            'min is above max',
+            'field n: default must be a number',
+            'default "z" is not one of its options',
+            'field empty: a select needs 1 to 20 options',
+            'type "date"',
+        ]) {
+            assert.ok(problems.includes(expected), `missing: ${expected}\n${problems}`);
+        }
+        p.actions[0]!.fields = Array.from({ length: 7 }, (_, i) => ({ id: `f${i}`, label: 'x', type: 'text' as const }));
+        assert.ok(descriptorProblems(p).some((m) => m.includes('at most 6 fields')));
+    });
+
     it('checks stand_ins shape', () => {
         const p = good();
         p.stand_ins = { receiver: { connected: 'no' as unknown as boolean, colour: true } as never };

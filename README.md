@@ -23,7 +23,7 @@ TypeScript, CommonJS, Node ≥ 20, **no runtime dependencies**.
 
 | Module | What it is |
 | --- | --- |
-| `descriptor` | `Plugin`, `PluginAction`, `PluginSettlement`, `Endpoint`, `ClockPolicy`, `StandIns` — the descriptor, field for field as `docs/plugins.md` has it, in the lab's snake_case. `descriptorProblems()` / `validateDescriptor()` check the console's rules (id format, paths on `base_url`, at most eight actions, …) so a bad card fails at start-up, not as a 400 every ten seconds |
+| `descriptor` | `Plugin`, `PluginAction` (and its form's `ActionField`s), `PluginSettlement`, `Endpoint`, `ClockPolicy`, `StandIns` — the descriptor, field for field as `docs/plugins.md` has it, in the lab's snake_case. `descriptorProblems()` / `validateDescriptor()` check the console's rules (id format, paths on `base_url`, at most eight actions, …) so a bad card fails at start-up, not as a 400 every ten seconds |
 | `plugin` | `LabPlugin`: register, renew every `renew_seconds` the console answers, retry quietly while the console is away (one line when it breaks, one when it is back), unregister on shutdown so the card goes grey at once |
 | `clock` | `LabClockFollower`: poll `GET /clock` every second, write the offset to the file the clock shim watches (only when it changes), remove a stale file when there is no lab at start, and **hold** the clock (`POST /clock/holds`) while `holdReason()` says there is work in flight |
 | `clock-shim` | `@fintechlab/runner/clock-shim`, a `node -r` preload that shifts `Date` by the offset in that file. Zero-dependency CommonJS — see [The clock shim](#the-clock-shim) |

@@ -175,7 +175,10 @@ function followClockFile() {
             const target = mostRecentBusinessDay(new RealDate());
             next = target ? target.getTime() - RealDate.now() : 0;
         } else {
-            next = Number(parsed.offset_ms);
+            // Whole milliseconds: Date.now() is an integer everywhere else, and
+            // libraries rely on it (PostHog's uuidv7 throws on a fraction).
+            // An offset worked out from a nanosecond clock is not.
+            next = Math.round(Number(parsed.offset_ms));
         }
         if (!Number.isFinite(next) || next === offset) {
             return;

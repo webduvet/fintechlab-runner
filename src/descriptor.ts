@@ -32,6 +32,31 @@ export interface PluginAction {
     confirm?: string;
     /** The toast when the platform's answer carries no `note` of its own. */
     note?: string;
+    /**
+     * Inputs asked for before the call. With any, the button opens a form in
+     * a modal and the call's JSON body is `{"<field id>": value}` — numbers
+     * as numbers, empty fields left out. At most six.
+     */
+    fields?: ActionField[];
+}
+
+/** One input of an action's form. */
+export interface ActionField {
+    /** Unique within the action; the key in the JSON body. Lower-case letters, digits, underscores. */
+    id: string;
+    label: string;
+    type: 'number' | 'text' | 'select';
+    /** What the field starts with: a number for `number`, a string otherwise. */
+    default?: number | string;
+    /** `number` only. */
+    min?: number;
+    max?: number;
+    /** `text` only: shown while it is empty. */
+    placeholder?: string;
+    /** `select` only: one to twenty choices. */
+    options?: Array<{ value: string; label: string }>;
+    /** A sentence under the form: what the field changes. */
+    hint?: string;
 }
 
 /** The two platform-internal arrows of the System in test diagram. */
@@ -155,6 +180,62 @@ export const LAB_SERVICE_IDS: readonly string[] = [
 const ID = /^[a-z0-9][a-z0-9-]{0,40}$/;
 const LOG_NAME = /^[a-z0-9][a-z0-9_-]{0,40}$/;
 const MAX_ACTIONS = 8;
+const FIELD_ID = /^[a-z][a-z0-9_]{0,40}$/;
+const MAX_FIELDS = 6;
+const MAX_OPTIONS = 20;
+
+/** Shape problems in one action's fields, in the console's words. */
+function fieldProblems(actionId: string, fields: ActionField[] | undefined): string[] {
+    if (fields === undefined) return [];
+    const where = `action ${actionId}`;
+    if (!Array.isArray(fields)) return [`${where}: fields must be a list`];
+    const problems: string[] = [];
+    if (fields.length > MAX_FIELDS) problems.push(`${where}: at most ${MAX_FIELDS} fields`);
+    const seen = new Set<string>();
+    for (const f of fields) {
+        if (!FIELD_ID.test(f.id ?? '') || seen.has(f.id)) {
+            problems.push(`${where}: field id "${f.id}" must be unique, lower-case letters, digits and underscores`);
+        }
+        seen.add(f.id);
+        const at = `${where} field ${f.id}`;
+        if (!f.label?.trim()) problems.push(`${at} needs a label`);
+        switch (f.type) {
+            case 'number':
+                for (const k of ['default', 'min', 'max'] as const) {
+                    const v = f[k];
+                    if (v !== undefined && (typeof v !== 'number' || !Number.isFinite(v))) {
+                        problems.push(`${at}: ${k} must be a number`);
+                    }
+                }
+                if (typeof f.min === 'number' && typeof f.max === 'number' && f.min > f.max) {
+                    problems.push(`${at}: min is above max`);
+                }
+                break;
+            case 'text':
+                if (f.default !== undefined && typeof f.default !== 'string') {
+                    problems.push(`${at}: default must be text`);
+                }
+                break;
+            case 'select': {
+                const options = f.options ?? [];
+                if (!Array.isArray(options) || options.length === 0 || options.length > MAX_OPTIONS) {
+                    problems.push(`${at}: a select needs 1 to ${MAX_OPTIONS} options`);
+                    break;
+                }
+                if (options.some((o) => typeof o?.value !== 'string' || !o.label?.trim())) {
+                    problems.push(`${at}: every option needs a value and a label`);
+                }
+                if (f.default !== undefined && !options.some((o) => o.value === f.default)) {
+                    problems.push(`${at}: default "${String(f.default)}" is not one of its options`);
+                }
+                break;
+            }
+            default:
+                problems.push(`${at}: type "${String(f.type)}" — number, text or select`);
+        }
+    }
+    return problems;
+}
 
 function pathProblem(field: string, p: string | undefined, required: boolean): string | undefined {
     if (p === undefined || p === '') return required ? `${field} is required` : undefined;
@@ -207,6 +288,7 @@ export function descriptorProblems(p: Plugin, reservedIds: readonly string[] = L
             add(`action ${a.id}: method "${a.method}" — actions change something, so POST, PUT or DELETE`);
         }
         add(pathProblem(`action ${a.id} path`, a.path, true));
+        for (const problem of fieldProblems(a.id, a.fields)) add(problem);
     }
     const s = p.settlement;
     if (s) {

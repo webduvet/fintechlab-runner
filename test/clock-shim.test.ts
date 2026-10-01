@@ -41,6 +41,22 @@ describe('clock shim', () => {
         assert.ok(Math.abs(Number(got.skew) - 7_200_000) < 50);
     });
 
+    it('keeps Date.now() a whole number when the lab sends a fractional offset', () => {
+        // The lab clock once published offsets worked out from nanoseconds;
+        // a fractional Date.now() made PostHog's uuidv7 throw and killed a process.
+        const dir = mkdtempSync(join(tmpdir(), 'fintechlab-shim-'));
+        const file = join(dir, 'clock.json');
+        writeFileSync(file, JSON.stringify({ offset_ms: 29643060.766812, mode: 'lab', reason: 'test' }));
+        const got = withShim(
+            { RUNNER_CLOCK_FILE: file },
+            `const shim = globalThis[Symbol.for('@fintechlab/runner/clock-shim')];
+             console.log(JSON.stringify({ now: Date.now(), offset: shim.offsetMs, time: new Date().getTime() }))`
+        );
+        assert.ok(Number.isInteger(got.now), `Date.now() = ${got.now}`);
+        assert.ok(Number.isInteger(got.time), `getTime() = ${got.time}`);
+        assert.equal(got.offset, 29643061);
+    });
+
     it('pins to RUNNER_NOW', () => {
         const dir = mkdtempSync(join(tmpdir(), 'fintechlab-shim-'));
         const got = withShim(
