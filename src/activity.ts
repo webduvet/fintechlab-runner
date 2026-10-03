@@ -25,6 +25,23 @@ export interface ActivityEvent {
     summary: string;
     status: EventStatus;
     detail?: Record<string, string>;
+    /**
+     * The event's parts — a settlement run's stages — each with its own
+     * status and times. The console draws them as a table under the event.
+     */
+    steps?: ActivityStep[];
+}
+
+/** One part of an event (the lab's activity.Step). */
+export interface ActivityStep {
+    name: string;
+    /** An event status, or "running" for one started and not finished. */
+    status: EventStatus | 'running';
+    /** ISO 8601. */
+    started_at?: string;
+    /** ISO 8601; absent while it is running, or if it never finished. */
+    finished_at?: string;
+    note?: string;
 }
 
 export interface ActivitySnapshot {

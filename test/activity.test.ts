@@ -61,4 +61,20 @@ describe('ActivityLog', () => {
         const wall = Date.parse(wallClock());
         assert.ok(Math.abs(shifted - 86_400_000 - wall) < 1000);
     });
+
+    it("carries an event's steps through update and snapshot", () => {
+        const log = new ActivityLog('runs', 'Runs', '');
+        const ev = log.record({ op: 'run', summary: 'started', status: 'ok' });
+        log.update(ev.seq, {
+            steps: [
+                { name: 'INGEST', status: 'ok', started_at: '2026-10-01T00:00:00.000Z', finished_at: '2026-10-01T00:00:16.000Z' },
+                { name: 'CALC', status: 'running', started_at: '2026-10-01T00:00:16.000Z' },
+            ],
+        });
+        const steps = log.snapshot().events[0]?.steps ?? [];
+        assert.deepEqual(steps.map((s) => [s.name, s.status, s.finished_at ?? null]), [
+            ['INGEST', 'ok', '2026-10-01T00:00:16.000Z'],
+            ['CALC', 'running', null],
+        ]);
+    });
 });
