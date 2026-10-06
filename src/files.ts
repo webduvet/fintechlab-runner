@@ -1,20 +1,22 @@
 /**
  * Settlement files from anywhere: a store the platform keeps them in, and
- * the two routes the console's files table calls (docs/plugins.md,
- * Settlement — upload_path and preview_path).
+ * the routes the console's files table calls (docs/plugins.md, Settlement —
+ * upload_path, preview_path, delete_path and reveal_path).
  *
  * A file can be big — a real acquirer's day can run to a million lines —
  * so nothing here reads a whole file into memory: an upload is streamed to
  * disk, and a preview reads lines until it has enough and stops.
  */
 
+import { spawn } from 'node:child_process';
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { basename, extname, resolve } from 'node:path';
+import { basename, dirname, extname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import type { Readable } from 'node:stream';
+import { pathToFileURL } from 'node:url';
 
-import { json, type RouteHandler } from './http';
+import { isInvalidBody, json, readBody, type RouteHandler } from './http';
 import { errorMessage } from './util';
 
 export interface StoredFile {
@@ -271,6 +273,185 @@ export function previewHandler(find: (name: string) => string | undefined): Rout
             json(res, 200, { name, ...(await headLines(path, max)) });
         } catch (err) {
             json(res, 500, { error: errorMessage(err) });
+        }
+    };
+}
+
+/** A file the platform lists, as deleteHandler sees it. */
+export interface ListedFile {
+    path: string;
+    /** Whether Delete may remove it. A fixture the repo tracks may not. */
+    deletable: boolean;
+    /** Why not, when it may not — the console shows it verbatim. */
+    why?: string;
+}
+
+export interface DeleteHooks {
+    /** After a file is deleted: drop whatever the platform cached about it. */
+    deleted?: (name: string, path: string) => void;
+}
+
+/**
+ * The delete_path route: DELETE ?name= deletes a listed file `find` says
+ * is deletable (204), refuses one it says is not (403, with its reason),
+ * and answers 404 for a name it does not list. The platform decides what
+ * may go — its generated files, uploads — and the route never deletes a
+ * path it was not handed by `find`.
+ */
+export function deleteHandler(find: (name: string) => ListedFile | undefined, hooks: DeleteHooks = {}): RouteHandler {
+    return async (_req: IncomingMessage, res: ServerResponse, url: URL) => {
+        const name = url.searchParams.get('name') ?? '';
+        const file = name ? find(name) : undefined;
+        if (!file) {
+            json(res, 404, { error: `no settlement file ${name}` });
+            return;
+        }
+        if (!file.deletable) {
+            json(res, 403, { error: file.why ?? `${name} is not one this platform deletes` });
+            return;
+        }
+        try {
+            rmSync(file.path);
+        } catch (err) {
+            json(res, 500, { error: errorMessage(err) });
+            return;
+        }
+        hooks.deleted?.(name, file.path);
+        res.writeHead(204).end();
+    };
+}
+
+/** One way of asking this machine's desktop to show a file. */
+export interface FileManagerCommand {
+    command: string;
+    args: string[];
+    /** It shows the file itself, selected, rather than only its folder. */
+    selects: boolean;
+}
+
+/**
+ * How to show `path` in this machine's file manager, best first. macOS and
+ * Windows reveal the file selected; on Linux the freedesktop FileManager1
+ * D-Bus call does (Files, Dolphin, Nemo and Thunar all answer it), and
+ * xdg-open on the folder is the fallback that works everywhere else.
+ */
+export function fileManagerCommands(path: string, platform: NodeJS.Platform = process.platform): FileManagerCommand[] {
+    if (platform === 'darwin') return [{ command: 'open', args: ['-R', path], selects: true }];
+    if (platform === 'win32') return [{ command: 'explorer.exe', args: [`/select,${path}`], selects: true }];
+    return [
+        {
+            command: 'gdbus',
+            args: [
+                'call', '--session',
+                '--dest', 'org.freedesktop.FileManager1',
+                '--object-path', '/org/freedesktop/FileManager1',
+                '--method', 'org.freedesktop.FileManager1.ShowItems',
+                `['${pathToFileURL(path).href}']`, '',
+            ],
+            selects: true,
+        },
+        { command: 'xdg-open', args: [dirname(path)], selects: false },
+    ];
+}
+
+/**
+ * Runs a command and resolves with its exit code — or 0 if it is still
+ * running after `settleMs`, which for a launcher means it opened something
+ * and stayed. Detached, so the platform's own shutdown never takes the
+ * file manager window with it.
+ */
+export type CommandRunner = (command: string, args: string[]) => Promise<number>;
+
+export function runDetached(settleMs = 3000): CommandRunner {
+    return (command, args) =>
+        new Promise((done) => {
+            let child;
+            try {
+                child = spawn(command, args, { detached: true, stdio: 'ignore' });
+            } catch {
+                done(-1);
+                return;
+            }
+            const timer = setTimeout(() => {
+                child.unref();
+                done(0);
+            }, settleMs);
+            child.on('error', () => {
+                clearTimeout(timer);
+                done(-1);
+            });
+            child.on('exit', (code) => {
+                clearTimeout(timer);
+                done(code ?? 0);
+            });
+        });
+}
+
+export interface RevealOptions {
+    platform?: NodeJS.Platform;
+    env?: NodeJS.ProcessEnv;
+    run?: CommandRunner;
+}
+
+export interface Revealed {
+    path: string;
+    dir: string;
+    selects: boolean;
+}
+
+/**
+ * Show `path` in this machine's file manager. Refused with 409 — the path
+ * in the message, so the operator can go there by hand — when there is no
+ * desktop to show it on (Linux without DISPLAY or WAYLAND_DISPLAY: a
+ * server, an SSH session) or nothing that tried could open it.
+ */
+export async function openInFileManager(path: string, options: RevealOptions = {}): Promise<Revealed> {
+    const platform = options.platform ?? process.platform;
+    const env = options.env ?? process.env;
+    const run = options.run ?? runDetached();
+    const dir = dirname(path);
+    if (platform !== 'darwin' && platform !== 'win32' && !env.DISPLAY && !env.WAYLAND_DISPLAY) {
+        throw new FileRefused(`there is no desktop session where this platform runs, so nothing to open it on — the file is at ${path}`, 409);
+    }
+    for (const c of fileManagerCommands(path, platform)) {
+        const code = await run(c.command, c.args);
+        // explorer.exe answers 1 when it has done exactly what was asked.
+        if (code === 0 || (platform === 'win32' && code === 1)) return { path, dir, selects: c.selects };
+    }
+    throw new FileRefused(`no file manager would open it — the file is at ${path}`, 409);
+}
+
+/**
+ * The reveal_path route: POST {"name"} opens the folder of a file `locate`
+ * knows, in this machine's file manager, and answers {name, path, dir,
+ * note} — the note being the console's toast. 404 for a name it does not
+ * know; 409, with the path, when there is no desktop to open it on.
+ */
+export function revealHandler(locate: (name: string) => string | undefined, options: RevealOptions = {}): RouteHandler {
+    return async (req: IncomingMessage, res: ServerResponse) => {
+        const body = await readBody(req);
+        const name = typeof body.name === 'string' ? body.name : '';
+        if (isInvalidBody(body) || !name) {
+            json(res, 400, { error: 'send {"name": "<file name>"} (GET files_path lists them)' });
+            return;
+        }
+        const path = locate(name);
+        if (!path) {
+            json(res, 404, { error: `no settlement file ${name}` });
+            return;
+        }
+        try {
+            const shown = await openInFileManager(path, options);
+            json(res, 200, {
+                name,
+                path: shown.path,
+                dir: shown.dir,
+                note: shown.selects
+                    ? `Opened ${shown.dir} in the file manager, with ${name} selected.`
+                    : `Opened ${shown.dir} in the file manager.`,
+            });
+        } catch (err) {
+            json(res, err instanceof FileRefused ? err.status : 500, { error: errorMessage(err), path });
         }
     };
 }

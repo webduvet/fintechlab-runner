@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -7,7 +7,18 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { after, describe, it } from 'node:test';
 
-import { FileRefused, FileStore, headLines, previewHandler, safeFileName, uploadHandler } from '../src/files';
+import {
+    deleteHandler,
+    fileManagerCommands,
+    FileRefused,
+    FileStore,
+    headLines,
+    openInFileManager,
+    previewHandler,
+    revealHandler,
+    safeFileName,
+    uploadHandler,
+} from '../src/files';
 import { routeRequests } from '../src/http';
 
 const dirs: string[] = [];
@@ -106,6 +117,91 @@ describe('uploadHandler and previewHandler', () => {
             assert.equal(store.list().length, 0);
         } finally {
             server.close();
+        }
+    });
+});
+
+async function serve(routes: Parameters<typeof routeRequests>[0]): Promise<{ base: string; close: () => void }> {
+    const server = createServer(routeRequests(routes));
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, close: () => server.close() };
+}
+
+describe('deleteHandler', () => {
+    it('deletes what the platform says may go, refuses the rest in its words', async () => {
+        const dir = tmp();
+        const gen = join(dir, 'gen.csv');
+        const fixture = join(dir, 'fixture.csv');
+        writeFileSync(gen, 'x');
+        writeFileSync(fixture, 'y');
+        const deleted: string[] = [];
+        const listed: Record<string, { path: string; deletable: boolean; why?: string }> = {
+            'gen.csv': { path: gen, deletable: true },
+            'fixture.csv': { path: fixture, deletable: false, why: 'a fixture the repo tracks' },
+        };
+        const srv = await serve({ 'DELETE /files': deleteHandler((n) => listed[n], { deleted: (n) => deleted.push(n) }) });
+        try {
+            assert.equal((await fetch(`${srv.base}/files?name=gen.csv`, { method: 'DELETE' })).status, 204);
+            assert.equal(existsSync(gen), false);
+            assert.deepEqual(deleted, ['gen.csv']);
+            const refused = await fetch(`${srv.base}/files?name=fixture.csv`, { method: 'DELETE' });
+            assert.equal(refused.status, 403);
+            assert.equal(((await refused.json()) as { error: string }).error, 'a fixture the repo tracks');
+            assert.equal(existsSync(fixture), true);
+            assert.equal((await fetch(`${srv.base}/files?name=../../etc/passwd`, { method: 'DELETE' })).status, 404);
+        } finally {
+            srv.close();
+        }
+    });
+});
+
+describe('opening a file in the file manager', () => {
+    it('picks the command that selects the file, per platform', () => {
+        assert.deepEqual(fileManagerCommands('/a/b c.csv', 'darwin').map((c) => c.command), ['open']);
+        assert.deepEqual(fileManagerCommands('C:\\x\\f.csv', 'win32')[0]?.args, ['/select,C:\\x\\f.csv']);
+        const linux = fileManagerCommands('/a/b c.csv', 'linux');
+        assert.deepEqual(linux.map((c) => c.command), ['gdbus', 'xdg-open']);
+        assert.ok(linux[0]?.args.includes("['file:///a/b%20c.csv']"));
+        assert.deepEqual(linux[1]?.args, ['/a']);
+    });
+
+    it('falls back to the folder when the file manager cannot select', async () => {
+        const ran: string[] = [];
+        const shown = await openInFileManager('/data/f.csv', {
+            platform: 'linux',
+            env: { WAYLAND_DISPLAY: 'wayland-0' },
+            run: async (cmd) => (ran.push(cmd), cmd === 'gdbus' ? 1 : 0),
+        });
+        assert.deepEqual(ran, ['gdbus', 'xdg-open']);
+        assert.deepEqual(shown, { path: '/data/f.csv', dir: '/data', selects: false });
+    });
+
+    it('refuses with the path where there is no desktop, and runs nothing', async () => {
+        const ran: string[] = [];
+        await assert.rejects(
+            openInFileManager('/srv/f.csv', { platform: 'linux', env: {}, run: async (c) => (ran.push(c), 0) }),
+            (err: unknown) => err instanceof FileRefused && err.status === 409 && err.message.includes('/srv/f.csv')
+        );
+        assert.deepEqual(ran, []);
+    });
+
+    it('revealHandler answers with the folder it opened, or why not', async () => {
+        const srv = await serve({
+            'POST /reveal': revealHandler((n) => (n === 'f.csv' ? '/data/f.csv' : undefined), {
+                platform: 'darwin',
+                run: async () => 0,
+            }),
+        });
+        try {
+            const ok = await fetch(`${srv.base}/reveal`, { method: 'POST', body: JSON.stringify({ name: 'f.csv' }) });
+            assert.equal(ok.status, 200);
+            const body = (await ok.json()) as { dir: string; note: string };
+            assert.equal(body.dir, '/data');
+            assert.match(body.note, /with f\.csv selected/);
+            assert.equal((await fetch(`${srv.base}/reveal`, { method: 'POST', body: '{"name":"x.csv"}' })).status, 404);
+            assert.equal((await fetch(`${srv.base}/reveal`, { method: 'POST', body: 'nope' })).status, 400);
+        } finally {
+            srv.close();
         }
     });
 });

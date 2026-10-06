@@ -78,10 +78,53 @@ export interface PluginSettlement {
     upload_path?: string;
     /** GET ?name=&lines=: the head of a file. previewHandler(). */
     preview_path?: string;
+    /**
+     * DELETE ?name=: delete a listed file the platform marked `deletable`
+     * (its generated files, say — never a fixture the repo tracks).
+     * deleteHandler(). Without it the console can remove only uploads,
+     * through upload_path.
+     */
+    delete_path?: string;
+    /**
+     * POST {"name": "<file>"}: open the folder a file is in, in this
+     * machine's file manager — the console's *Open location*. Only the
+     * platform can: the console may be in a container, and a web page may
+     * not open a local folder. revealHandler().
+     */
+    reveal_path?: string;
     /** The activity log whose total is the diagram's "runs". */
     runs_log?: string;
     /** The diagram's arrows mapped to the platform's own stage names. */
     stages?: Partial<Record<SettlementStageArrow, string[]>>;
+}
+
+/**
+ * One row of GET files_path's `files` (docs/plugins.md, Settlement). The
+ * console draws the table from these fields and nothing else.
+ */
+export interface SettlementFileRow {
+    name: string;
+    currency: string;
+    mids: string[];
+    total: string;
+    /** What a bare run uploads. */
+    default?: boolean;
+    /** False when some MIDs have no merchant; null when that is unknown. */
+    seeded?: boolean | null;
+    missing_mids?: string[];
+    seed_command?: string | null;
+    /** Taken through upload_path. */
+    uploaded?: boolean;
+    bytes?: number;
+    /** Why it cannot run (not a Worldline file); such a row has no Run. */
+    problem?: string;
+    /** The console offers Delete (through delete_path). */
+    deletable?: boolean;
+    /** The directory it is in, as the platform names it — shown under the
+        name when it differs from the answer's `dir`. */
+    location?: string;
+    in_flight?: unknown;
+    last_run?: unknown;
 }
 
 /**
@@ -297,6 +340,8 @@ export function descriptorProblems(p: Plugin, reservedIds: readonly string[] = L
         add(pathProblem('settlement.status_path', s.status_path, false));
         add(pathProblem('settlement.upload_path', s.upload_path, false));
         add(pathProblem('settlement.preview_path', s.preview_path, false));
+        add(pathProblem('settlement.delete_path', s.delete_path, false));
+        add(pathProblem('settlement.reveal_path', s.reveal_path, false));
         if (s.runs_log !== undefined && s.runs_log !== '' && !LOG_NAME.test(s.runs_log)) {
             add(`settlement.runs_log "${s.runs_log}" is not a log name`);
         }
