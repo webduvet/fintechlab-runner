@@ -7,9 +7,13 @@ serve its logs in the lab's shape.
 
 The lab simulates vendors — Worldline, B4B, Banking Circle, ACI — and knows
 no platform by name. A platform under test **registers itself** with the
-console (`POST /api/plugins`) and **follows the lab clock** (`GET /clock`).
-Both calls are outbound from the platform, so they work against a lab on
-another machine. The contract is the lab's `docs/plugins.md`; this library
+lab (`POST /v1/plugins`) and **follows the lab clock** (`GET /v1/clock`),
+both on the **lab API** — the lab's one address, `:8097`, with a bearer
+token when the lab asks for one. Both calls are outbound from the platform,
+so they work against a lab on another machine. What the platform's runner
+or tests do *to* the lab — land a wire, run a vendor's cycle now, arm a
+trap, reset — goes there too (`LabClient`); what it does to a vendor goes to
+that vendor's own surface, as with the real one. The contract is the lab's `docs/plugins.md`; this library
 is that contract as typed code, plus the pieces every platform's local
 runner ends up writing anyway.
 
@@ -24,12 +28,13 @@ TypeScript, CommonJS, Node ≥ 20, **no runtime dependencies**.
 | Module | What it is |
 | --- | --- |
 | `descriptor` | `Plugin`, `PluginAction` (and its form's `ActionField`s), `PluginSettlement`, `Endpoint`, `ClockPolicy`, `StandIns` — the descriptor, field for field as `docs/plugins.md` has it, in the lab's snake_case. `descriptorProblems()` / `validateDescriptor()` check the console's rules (id format, paths on `base_url`, at most eight actions, …) so a bad card fails at start-up, not as a 400 every ten seconds |
-| `plugin` | `LabPlugin`: register, renew every `renew_seconds` the console answers, retry quietly while the console is away (one line when it breaks, one when it is back), unregister on shutdown so the card goes grey at once |
-| `clock` | `LabClockFollower`: poll `GET /clock` every second, write the offset to the file the clock shim watches (only when it changes), remove a stale file when there is no lab at start, and **hold** the clock (`POST /clock/holds`) while `holdReason()` says there is work in flight |
+| `plugin` | `LabPlugin`: register at the lab API (`labUrl`, with `token`), renew every `renew_seconds` the console answers, retry quietly while the console is away (one line when it breaks, one when it is back), unregister on shutdown so the card goes grey at once |
+| `clock` | `LabClockFollower`: poll the lab clock (`GET /v1/clock` on the lab API, with `token`) every second, write the offset to the file the clock shim watches (only when it changes), remove a stale file when there is no lab at start, and **hold** the clock (`POST /clock/holds`) while `holdReason()` says there is work in flight |
 | `clock-shim` | `@fintechlab/runner/clock-shim`, a `node -r` preload that shifts `Date` by the offset in that file. Zero-dependency CommonJS — see [The clock shim](#the-clock-shim) |
 | `activity` | `ActivityLog`: a fixed-size ring in the lab's activity shape (`{"logs": [{name, title, note, labels, total, kept, last, events}]}`), stamped on the wall clock even under the shim; `activityBody()` serves several |
 | `files` | `FileStore` (a directory of uploaded files: streamed to disk under a safe name that never shadows a reserved one, capped, never half-written), `headLines` (the first N lines of any file, reading no further), `eachLine`, and the routes the console's files table calls — `uploadHandler` (`upload_path`: POST keeps, DELETE forgets), `previewHandler` (`preview_path`), `deleteHandler` (`delete_path`: deletes a listed file the platform marks deletable, refuses the rest with its reason) and `revealHandler` (`reveal_path`: *Open location* — shows the file in this machine's file manager via `open -R`, `explorer /select,`, or the freedesktop FileManager1 D-Bus call with `xdg-open` as the fallback; a 409 with the path where there is no desktop session) |
-| `config` | `loadLabConfig()`: the optional `fintechlab.json` merged with the environment, env winning |
+| `config` | `loadLabConfig()`: the optional `fintechlab.json` merged with the environment, env winning — the lab API's address (`labUrl`), its token, and the clock to follow |
+| `lab` | `LabClient`: the lab API for what the platform does to the lab — `sim(service, path)` for any service's lab hook through the passthrough, `reset()`, and `request()` for the rest of `/v1`. Every answer comes back with its status for the caller to judge |
 | `http` | `readBody`, `json`, and a `"METHOD /path"` route table (`createControlServer`) — the plumbing of a control API |
 | `supervise` | `Supervisor`: child processes with name-prefixed output, a port check on both address families before starting, one retry for a death on the way up, and nothing after that but a report. `portFree`, `bindable`, `runCommand`, `captureCommand` |
 | `wait` | `waitFor` (once a second, then carry on), `pollFor` (deadline-based, every check bounded, monotonic clock) |
@@ -76,8 +81,8 @@ const server = createServer(
     })
 );
 
-const clock = new LabClockFollower({ url: lab.clockUrl, holder: 'my-platform' });
-const plugin = new LabPlugin({ consoleUrl: lab.consoleUrl, descriptor });
+const clock = new LabClockFollower({ url: lab.clockUrl, token: lab.token, holder: 'my-platform' });
+const plugin = new LabPlugin({ labUrl: lab.labUrl, token: lab.token, descriptor });
 
 void (async () => {
     await clock.start(); // before starting anything that reads the clock
@@ -107,6 +112,7 @@ Holding the clock while work is in flight:
 ```ts
 const clock = new LabClockFollower({
     url: lab.clockUrl,
+    token: lab.token,
     holder: 'my-platform',
     holdReason: () => (running.size ? `settlement in flight: ${[...running].join(', ')}` : null),
 });
@@ -117,6 +123,21 @@ void clock.syncHold();
 Moves are then refused with `409` and that reason. A hold lapses after
 `holdTtlSeconds` (default 900), so a platform killed mid-run cannot freeze
 the lab; `clock.stop()` releases it on a clean exit.
+
+Doing something *to* the lab — what no vendor's API offers — goes through
+the same address and token:
+
+```ts
+const labApi = new LabClient({ url: lab.labUrl, token: lab.token });
+// Worldline's lump sum landing on the safeguarding account
+await labApi.sim('banking-circle', 'incoming-payments', { body: { currency: 'EUR', amount: '1000.00', reference: 'top-up' } });
+// a cycle now, rather than at 08:00
+await labApi.sim('worldline', `settlement-cycle/run?slot=morning&date=${date}`, { method: 'POST' });
+await labApi.reset({ scope: 'flow' });
+```
+
+`GET /v1` on the lab lists every route; the lab's `docs/api/lab-api.md`
+describes them.
 
 ## The clock shim
 
@@ -152,8 +173,10 @@ them keeps working:
 
 | File field | Environment | Default | Who dials it |
 | --- | --- | --- | --- |
-| `console_url` | `FINTECH_SIM_LAB_CONSOLE_URL` | `http://127.0.0.1:8090` | the platform → the console |
-| `clock_url` | `FINTECH_SIM_LAB_CLOCK_URL` | `http://127.0.0.1:8096/clock` | the platform → the clock |
+| `lab_url` | `FINTECH_SIM_LAB_URL` | `http://127.0.0.1:8097` | the platform → the lab API: registration, the clock, `LabClient` |
+| `lab_token` | `FINTECH_SIM_LAB_TOKEN`, else the lab's own `LAB_API_TOKEN` | none | sent as `Authorization: Bearer …` when the lab asks for one. Better in the environment than in a file |
+| `clock_url` | `FINTECH_SIM_LAB_CLOCK_URL` | `{lab_url}/v1/clock` | the platform → the clock. Set it only to follow the clock service itself (`http://127.0.0.1:8096/clock`), as against a lab without the lab API |
+| `console_url` | `FINTECH_SIM_LAB_CONSOLE_URL` | `http://127.0.0.1:8090` | only for a lab without the lab API: `new LabPlugin({ consoleUrl })` registers at its `/api/plugins` |
 | `advertised_url` | `RUNNER_ADVERTISED_URL` | `defaults.advertisedUrl` | the console → the platform (`base_url`) |
 | `browse_url` | `RUNNER_BROWSE_URL` | `defaults.browseUrl` | a browser → the platform (`browse_url`) |
 | `stand_ins` | — | none | see below |

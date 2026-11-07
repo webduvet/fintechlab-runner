@@ -11,7 +11,25 @@ const dir = () => mkdtempSync(join(tmpdir(), 'fintechlab-config-'));
 describe('loadLabConfig', () => {
     it('with no file and no env: the lab on this machine, no stand_ins', () => {
         const c = loadLabConfig({ dir: dir(), env: {} });
-        assert.deepEqual(c, { consoleUrl: 'http://127.0.0.1:8090', clockUrl: 'http://127.0.0.1:8096/clock' });
+        assert.deepEqual(c, {
+            labUrl: 'http://127.0.0.1:8097',
+            clockUrl: 'http://127.0.0.1:8097/v1/clock',
+            consoleUrl: 'http://127.0.0.1:8090',
+        });
+    });
+
+    it('one address: the clock follows lab_url, and the token comes from the env before the file', () => {
+        const d = dir();
+        writeFileSync(join(d, 'fintechlab.json'), JSON.stringify({ lab_url: 'https://lab.example/', lab_token: 'from-file' }));
+        const fromFile = loadLabConfig({ dir: d, env: {} });
+        assert.equal(fromFile.labUrl, 'https://lab.example');
+        assert.equal(fromFile.clockUrl, 'https://lab.example/v1/clock');
+        assert.equal(fromFile.token, 'from-file');
+        // the lab's own name for it, then the runner's, win in that order
+        assert.equal(loadLabConfig({ dir: d, env: { LAB_API_TOKEN: 'lab' } }).token, 'lab');
+        assert.equal(loadLabConfig({ dir: d, env: { LAB_API_TOKEN: 'lab', FINTECH_SIM_LAB_TOKEN: 'runner' } }).token, 'runner');
+        assert.equal(loadLabConfig({ dir: d, env: { FINTECH_SIM_LAB_URL: 'http://other:8097' } }).clockUrl, 'http://other:8097/v1/clock');
+        assert.equal(loadLabConfig({ dir: dir(), env: {} }).token, undefined);
     });
 
     it('reads the file, and the env wins over it', () => {

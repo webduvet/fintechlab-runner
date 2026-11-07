@@ -2,7 +2,9 @@
  * Following the lab's clock.
  *
  * The lab owns one business clock (its `clock` service, :8096) and every
- * vendor follows its offset from the real time. A platform that follows it
+ * vendor follows its offset from the real time. A platform reads it through
+ * the lab API (`GET {labUrl}/v1/clock`, LabConfig.clockUrl), with the lab's
+ * token when it asks for one. A platform that follows it
  * too books a payout "on Monday" on the same Monday as the bank. Only the
  * offset changes hands, polled once a second, so a follower anywhere is
  * right to within its poll — and it is outbound, so it works wherever the
@@ -73,8 +75,14 @@ export function writeClockFile(file: string, content: ClockFileContent): void {
 }
 
 export interface LabClockFollowerOptions {
-    /** The clock service's `GET /clock`, e.g. http://127.0.0.1:8096/clock. */
+    /**
+     * The clock to read: the lab API's, http://127.0.0.1:8097/v1/clock
+     * (LabConfig.clockUrl), or the clock service's own GET /clock. Holds go
+     * to {url}/holds on either.
+     */
     url: string;
+    /** The lab's token (LabConfig.token), when it asks for one. */
+    token?: string;
     /** Who holds the clock: the plugin id is the natural choice. */
     holder: string;
     /** The file the platform's clock shims watch. Default: defaultClockFile(). */
@@ -127,6 +135,7 @@ export class LabClockFollower {
     private readonly options: LabClockFollowerOptions;
     private readonly fetch: Fetch;
     private readonly logger: Logger;
+    private readonly headers: Record<string, string>;
     private timer?: ReturnType<typeof setInterval>;
     private readonly current: LabClockFollowerState = { reachable: false };
 
@@ -137,6 +146,7 @@ export class LabClockFollower {
         this.clockFile = options.clockFile ?? defaultClockFile();
         this.fetch = options.fetch ?? ((input, init) => fetch(input, init));
         this.logger = options.logger ?? console;
+        this.headers = options.token ? { Authorization: `Bearer ${options.token}` } : {};
     }
 
     get state(): Readonly<LabClockFollowerState> {
@@ -149,7 +159,7 @@ export class LabClockFollower {
 
     /** One read of the lab clock. Throws on anything but a usable answer. */
     async read(): Promise<LabClock> {
-        const res = await this.fetch(this.url, { signal: AbortSignal.timeout(this.timeoutMs) });
+        const res = await this.fetch(this.url, { headers: this.headers, signal: AbortSignal.timeout(this.timeoutMs) });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const body = (await res.json()) as LabClock;
         if (typeof body?.offset_ms !== 'number') throw new Error('no offset_ms in the answer');
@@ -225,7 +235,8 @@ export class LabClockFollower {
     }
 
     private get holdsUrl(): string {
-        // The holds live under the clock: POST /clock/holds, DELETE /clock/holds/{holder}.
+        // The holds live under the clock: POST {url}/holds, DELETE {url}/holds/{holder},
+        // on the lab API (/v1/clock/holds) and the clock service (/clock/holds) alike.
         return `${this.url}/holds`;
     }
 
@@ -235,7 +246,7 @@ export class LabClockFollower {
         try {
             const res = await this.fetch(this.holdsUrl, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...this.headers },
                 body: JSON.stringify({ holder: this.holder, reason, ttl_seconds: ttlSeconds }),
                 signal: AbortSignal.timeout(this.timeoutMs),
             });
@@ -253,6 +264,7 @@ export class LabClockFollower {
         try {
             const res = await this.fetch(`${this.holdsUrl}/${encodeURIComponent(this.holder)}`, {
                 method: 'DELETE',
+                headers: this.headers,
                 signal: AbortSignal.timeout(this.timeoutMs),
             });
             return res.ok || res.status === 404;

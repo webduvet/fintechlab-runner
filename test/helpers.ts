@@ -4,16 +4,20 @@ export interface Call {
     url: string;
     method: string;
     body?: unknown;
+    /** Only the Authorization header, and only when one was sent. */
+    authorization?: string;
 }
 
 /** A fetch that answers from a function and remembers every call. */
 export function fakeFetch(answer: (call: Call) => Response | Promise<Response> | Error): Fetch & { calls: Call[] } {
     const calls: Call[] = [];
     const f = async (input: string, init?: RequestInit) => {
+        const auth = new Headers(init?.headers).get('Authorization') ?? undefined;
         const call: Call = {
             url: input,
             method: init?.method ?? 'GET',
             body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
+            ...(auth ? { authorization: auth } : {}),
         };
         calls.push(call);
         const got = await answer(call);

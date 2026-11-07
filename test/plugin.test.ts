@@ -29,6 +29,26 @@ describe('LabPlugin', () => {
         assert.equal(logger.lines.length, 1, 'registered is said once');
     });
 
+    it('registers with the lab API, with the token, and unregisters there', async () => {
+        const fetch = fakeFetch((call) => (call.method === 'DELETE' ? new Response(null, { status: 204 }) : accepted()));
+        const p = new LabPlugin({ labUrl: 'http://lab:8097/', token: 's3cret', descriptor, fetch, logger: memoryLogger() });
+        assert.equal(await p.register(), true);
+        assert.deepEqual(fetch.calls[0], {
+            url: 'http://lab:8097/v1/plugins',
+            method: 'POST',
+            body: descriptor(),
+            authorization: 'Bearer s3cret',
+        });
+        assert.equal(await p.stop(), true);
+        assert.deepEqual(fetch.calls.at(-1), {
+            url: 'http://lab:8097/v1/plugins/my-platform',
+            method: 'DELETE',
+            body: undefined,
+            authorization: 'Bearer s3cret',
+        });
+        assert.throws(() => new LabPlugin({ descriptor }), /needs labUrl/);
+    });
+
     it('logs a failure once, again only when the reason changes, and recovers', async () => {
         let answer: () => Response | Error = () => new Error('ECONNREFUSED');
         const fetch = fakeFetch(() => answer());

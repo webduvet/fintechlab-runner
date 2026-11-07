@@ -120,6 +120,31 @@ describe('LabClockFollower', () => {
         assert.equal(f.view().holding, undefined);
     });
 
+    it('reads and holds through the lab API with the token', async () => {
+        const fetch = fakeFetch((call) =>
+            call.method === 'GET' ? jsonResponse(200, { offset_ms: 0, mode: 'real' }) : new Response(null, { status: 200 })
+        );
+        const f = new LabClockFollower({
+            url: 'http://lab:8097/v1/clock',
+            token: 's3cret',
+            holder: 'p',
+            clockFile: tmpFile(),
+            fetch,
+            logger: memoryLogger(),
+        });
+        await f.poll();
+        await f.hold('a run');
+        await f.release();
+        assert.deepEqual(
+            fetch.calls.map((c) => [c.method, c.url, c.authorization]),
+            [
+                ['GET', 'http://lab:8097/v1/clock', 'Bearer s3cret'],
+                ['POST', 'http://lab:8097/v1/clock/holds', 'Bearer s3cret'],
+                ['DELETE', 'http://lab:8097/v1/clock/holds/p', 'Bearer s3cret'],
+            ]
+        );
+    });
+
     it('releases its hold on stop', async () => {
         const fetch = fakeFetch(() => new Response(null, { status: 204 }));
         const f = new LabClockFollower({ url: URL_, holder: 'p', clockFile: tmpFile(), fetch, logger: memoryLogger() });

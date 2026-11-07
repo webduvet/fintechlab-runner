@@ -9,12 +9,17 @@
  *     and are what a .env already carries.
  *
  *   {
- *     "console_url":    "http://127.0.0.1:8090",
- *     "clock_url":      "http://127.0.0.1:8096/clock",
+ *     "lab_url":        "http://127.0.0.1:8097",
+ *     "lab_token":      "…",
  *     "advertised_url": "http://host.containers.internal:3109",
  *     "browse_url":     "http://127.0.0.1:3109",
  *     "stand_ins": {"receiver": {"connected": false, "shown": false}}
  *   }
+ *
+ * The lab is one address: its lab API. The platform registers there
+ * (/v1/plugins), follows the clock there (/v1/clock), and sends the token
+ * there when the lab asks for one. console_url and clock_url are for a lab
+ * without the lab API; clock_url, when set, still names the clock to follow.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -23,21 +28,34 @@ import { resolve } from 'node:path';
 import { isRecord, standInProblems, type StandIns } from './descriptor';
 import { trimSlash } from './util';
 
+export const DEFAULT_LAB_URL = 'http://127.0.0.1:8097';
 export const DEFAULT_CONSOLE_URL = 'http://127.0.0.1:8090';
+/** The clock service itself, for a lab without the lab API. */
 export const DEFAULT_CLOCK_URL = 'http://127.0.0.1:8096/clock';
 export const CONFIG_FILE_NAME = 'fintechlab.json';
 
 /** The environment variables read, and the file field each overrides. */
 export const CONFIG_ENV = {
     file: 'FINTECHLAB_CONFIG',
+    labUrl: 'FINTECH_SIM_LAB_URL',
+    labToken: 'FINTECH_SIM_LAB_TOKEN',
     consoleUrl: 'FINTECH_SIM_LAB_CONSOLE_URL',
     clockUrl: 'FINTECH_SIM_LAB_CLOCK_URL',
     advertisedUrl: 'RUNNER_ADVERTISED_URL',
     browseUrl: 'RUNNER_BROWSE_URL',
 } as const;
 
+/**
+ * The lab's own name for its token (what `make up` and the e2e suite read),
+ * used when FINTECH_SIM_LAB_TOKEN is not set: a shell that started the lab
+ * with a token can start the platform too.
+ */
+export const LAB_TOKEN_FALLBACK_ENV = 'LAB_API_TOKEN';
+
 /** The config file, as written. */
 export interface LabConfigFile {
+    lab_url?: string;
+    lab_token?: string;
     console_url?: string;
     clock_url?: string;
     advertised_url?: string;
@@ -46,10 +64,17 @@ export interface LabConfigFile {
 }
 
 export interface LabConfig {
-    /** Where the platform reaches the console. */
-    consoleUrl: string;
-    /** The clock service's GET /clock. */
+    /** The lab API: where the platform registers, follows the clock, and calls the lab. */
+    labUrl: string;
+    /** Sent as `Authorization: Bearer …` to the lab API, when the lab asks for one. */
+    token?: string;
+    /**
+     * The clock to follow: the lab API's /v1/clock, unless clock_url names
+     * the clock service itself (a lab without the lab API).
+     */
     clockUrl: string;
+    /** The console, for a lab without the lab API (LabPlugin's consoleUrl). */
+    consoleUrl: string;
     /** Where the console reaches the platform: the descriptor's base_url. */
     advertisedUrl?: string;
     /** Where a browser reaches it: the descriptor's browse_url. */
@@ -68,10 +93,12 @@ export interface LoadLabConfigOptions {
     /** Default: process.env. */
     env?: NodeJS.ProcessEnv;
     /** Used for whatever neither the env nor the file sets. */
-    defaults?: Partial<Pick<LabConfig, 'consoleUrl' | 'clockUrl' | 'advertisedUrl' | 'browseUrl'>>;
+    defaults?: Partial<Pick<LabConfig, 'labUrl' | 'consoleUrl' | 'clockUrl' | 'advertisedUrl' | 'browseUrl'>>;
 }
 
 const FILE_FIELDS: Record<string, true> = {
+    lab_url: true,
+    lab_token: true,
     console_url: true,
     clock_url: true,
     advertised_url: true,
@@ -131,9 +158,13 @@ export function loadLabConfig(options: LoadLabConfigOptions = {}): LabConfig {
         fromEnv(envName) ?? fileValue ?? dflt;
     const advertisedUrl = pick(CONFIG_ENV.advertisedUrl, file.advertised_url, d.advertisedUrl);
     const browseUrl = pick(CONFIG_ENV.browseUrl, file.browse_url, d.browseUrl);
+    const labUrl = trimSlash(pick(CONFIG_ENV.labUrl, file.lab_url, d.labUrl) ?? DEFAULT_LAB_URL);
+    const token = fromEnv(CONFIG_ENV.labToken) ?? fromEnv(LAB_TOKEN_FALLBACK_ENV) ?? (file.lab_token || undefined);
     return {
+        labUrl,
+        ...(token ? { token } : {}),
+        clockUrl: trimSlash(pick(CONFIG_ENV.clockUrl, file.clock_url, d.clockUrl) ?? `${labUrl}/v1/clock`),
         consoleUrl: trimSlash(pick(CONFIG_ENV.consoleUrl, file.console_url, d.consoleUrl) ?? DEFAULT_CONSOLE_URL),
-        clockUrl: trimSlash(pick(CONFIG_ENV.clockUrl, file.clock_url, d.clockUrl) ?? DEFAULT_CLOCK_URL),
         ...(advertisedUrl ? { advertisedUrl } : {}),
         ...(browseUrl ? { browseUrl } : {}),
         ...(file.stand_ins ? { standIns: file.stand_ins } : {}),

@@ -10,15 +10,23 @@
  *
  * All of it is outbound from the platform: it works against a lab on
  * another machine with no tunnel. Only the card's live parts (health, logs,
- * buttons) need the console to reach the platform, at `base_url`.
+ * buttons) need the lab to reach the platform, at `base_url`.
+ *
+ * It registers with the lab API (`POST {labUrl}/v1/plugins`), with the
+ * lab's token when it asks for one. A lab without the lab API takes the
+ * same descriptor at the console's `/api/plugins` (consoleUrl).
  */
 
 import { validateDescriptor, type Plugin, type RegisterResponse } from './descriptor';
 import { errorMessage, sleep, trimSlash, type Fetch, type Logger } from './util';
 
 export interface LabPluginOptions {
-    /** Where the platform reaches the console, e.g. http://127.0.0.1:8090. */
-    consoleUrl: string;
+    /** The lab API, e.g. http://127.0.0.1:8097 (LabConfig.labUrl). */
+    labUrl?: string;
+    /** The console, for a lab without the lab API; used only without labUrl. */
+    consoleUrl?: string;
+    /** The lab's token (LabConfig.token), when it asks for one. */
+    token?: string;
     /**
      * The descriptor, or a function building it. A function is called on
      * every renewal, so a changed descriptor reaches the console within one
@@ -49,7 +57,9 @@ export interface LabPluginState {
 }
 
 export class LabPlugin {
-    readonly consoleUrl: string;
+    /** Where registrations go: {labUrl}/v1/plugins, or {consoleUrl}/api/plugins. */
+    readonly pluginsUrl: string;
+    private readonly headers: Record<string, string>;
     private readonly build: () => Plugin;
     private readonly fetch: Fetch;
     private readonly logger: Logger;
@@ -61,7 +71,10 @@ export class LabPlugin {
     private readonly current: LabPluginState;
 
     constructor(options: LabPluginOptions) {
-        this.consoleUrl = trimSlash(options.consoleUrl);
+        if (options.labUrl) this.pluginsUrl = `${trimSlash(options.labUrl)}/v1/plugins`;
+        else if (options.consoleUrl) this.pluginsUrl = `${trimSlash(options.consoleUrl)}/api/plugins`;
+        else throw new Error('LabPlugin needs labUrl (or, for a lab without the lab API, consoleUrl)');
+        this.headers = options.token ? { Authorization: `Bearer ${options.token}` } : {};
         const d = options.descriptor;
         this.build = typeof d === 'function' ? d : () => d;
         this.fetch = options.fetch ?? ((input, init) => fetch(input, init));
@@ -97,9 +110,9 @@ export class LabPlugin {
     private async attempt(): Promise<boolean> {
         try {
             const descriptor = this.descriptor();
-            const res = await this.fetch(`${this.consoleUrl}/api/plugins`, {
+            const res = await this.fetch(this.pluginsUrl, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', ...this.headers },
                 body: JSON.stringify(descriptor),
                 signal: AbortSignal.timeout(this.timeoutMs),
             });
@@ -109,7 +122,7 @@ export class LabPlugin {
                 this.current.renewMs = body.renew_seconds * 1000;
             }
             if (!this.current.live) {
-                this.logger.log(`🧩 registered with the lab console at ${this.consoleUrl}`);
+                this.logger.log(`🧩 registered with the lab at ${this.pluginsUrl}`);
                 this.current.since = new Date().toISOString();
             }
             this.current.live = true;
@@ -121,7 +134,7 @@ export class LabPlugin {
             // Once when it breaks, and again only if the reason changes: a
             // console that is down reads the same every ten seconds.
             if (this.current.live || this.current.error !== msg) {
-                this.logger.warn(`🧩 cannot register with the lab console at ${this.consoleUrl} (${msg}); retrying`);
+                this.logger.warn(`🧩 cannot register with the lab at ${this.pluginsUrl} (${msg}); retrying`);
             }
             this.current.live = false;
             this.current.error = msg;
@@ -161,8 +174,9 @@ export class LabPlugin {
         }
         this.current.live = false;
         try {
-            const res = await this.fetch(`${this.consoleUrl}/api/plugins/${encodeURIComponent(this.id)}`, {
+            const res = await this.fetch(`${this.pluginsUrl}/${encodeURIComponent(this.id)}`, {
                 method: 'DELETE',
+                headers: this.headers,
                 signal: AbortSignal.timeout(this.unregisterTimeoutMs),
             });
             return res.ok;
