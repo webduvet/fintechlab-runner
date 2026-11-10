@@ -7,11 +7,14 @@
  * (LabConfig.labUrl, LabConfig.token). A vendor's own surface is not called
  * through it: the platform reaches a vendor as it would the real one.
  *
- *   const lab = new LabClient({ url: config.labUrl, token: config.token });
+ *   const lab = new LabClient({ url: config.labUrl, token: config.token, environment: config.environment });
  *   await lab.sim('banking-circle', 'incoming-payments', { body: { currency: 'EUR', amount: '1000.00' } });
  *   await lab.reset({ scope: 'flow' });
  *
  * GET {url}/v1 lists every route; docs/api/lab-api.md in the lab describes them.
+ *
+ * Every call is in one environment (the lab's docs/lab-api/environments.md):
+ * the token's own, or the one `environment` names for the admin token.
  */
 
 import { DEFAULT_LAB_URL } from './config';
@@ -22,6 +25,8 @@ export interface LabClientOptions {
     url?: string;
     /** Sent as `Authorization: Bearer …` when the lab asks for one. */
     token?: string;
+    /** Sent as `Lab-Environment`: the environment the calls act in (LabConfig.environment). */
+    environment?: string;
     /** Per request. Default 10s. */
     timeoutMs?: number;
     fetch?: Fetch;
@@ -51,7 +56,7 @@ export class LabClient {
 
     constructor(options: LabClientOptions = {}) {
         this.url = trimSlash(options.url ?? DEFAULT_LAB_URL);
-        this.headers = options.token ? { Authorization: `Bearer ${options.token}` } : {};
+        this.headers = labHeaders(options.token, options.environment);
         this.timeoutMs = options.timeoutMs ?? 10_000;
         this.fetch = options.fetch ?? ((input, init) => fetch(input, init));
     }
@@ -97,8 +102,78 @@ export class LabClient {
         return this.request<T>(method, `/v1/services/${encodeURIComponent(service)}/sim/${rest.replace(/^\//, '')}`, init.body);
     }
 
-    /** Reset the lab, producers first and the clock last: POST /v1/lab/reset. */
+    /**
+     * Reset the lab, producers first and the clock last: POST /v1/lab/reset.
+     * Only this client's environment's records: another platform's are not
+     * this one's to clear.
+     */
     reset(options: LabResetOptions = {}): Promise<LabAnswer> {
         return this.post('/v1/lab/reset', options);
     }
+
+    /** The environment this client acts in: GET /v1/environment. */
+    environment(): Promise<LabAnswer<LabEnvironment>> {
+        return this.get<LabEnvironment>('/v1/environment');
+    }
+
+    /** Every environment (the admin token), or this one: GET /v1/environments. */
+    environments(): Promise<LabAnswer<{ environments: LabEnvironment[] }>> {
+        return this.get('/v1/environments');
+    }
+
+    /**
+     * Create an environment (the admin token): POST /v1/environments. The
+     * answer carries its token, which reaches only it.
+     */
+    createEnvironment(body: { name: string; id?: string; config?: LabEnvironmentConfig }): Promise<LabAnswer<{ environment: LabEnvironment; token: string }>> {
+        return this.request('POST', '/v1/environments', body);
+    }
+
+    /** Delete an environment and everything it made (the admin token). */
+    deleteEnvironment(id: string): Promise<LabAnswer> {
+        return this.request('DELETE', `/v1/environments/${encodeURIComponent(id)}`);
+    }
+
+    /**
+     * This environment's kit: the `.env` its platform runs with — its own
+     * logins at every vendor, its safeguarding accounts, its lab token.
+     * GET /v1/connect/env; the body is the file's text.
+     */
+    kit(host?: string): Promise<LabAnswer<string>> {
+        return this.get<string>(`/v1/connect/env${host ? `?host=${encodeURIComponent(host)}` : ''}`);
+    }
+}
+
+/** An environment's settings (all optional). */
+export interface LabEnvironmentConfig {
+    settlement_identifier?: string;
+    webhook_hosts?: string[];
+    aci_webhook_url?: string;
+    b4b_callback_url?: string;
+    clock?: 'follows' | 'wall';
+}
+
+/** An environment as the lab API shows it. */
+export interface LabEnvironment {
+    id: string;
+    name: string;
+    default?: boolean;
+    config: LabEnvironmentConfig;
+    created_at?: string;
+    /** never-seen until a vendor has seen its platform, then seen. */
+    state: 'never-seen' | 'seen';
+    last_seen: string | null;
+    seen_by: Record<string, string | null>;
+    token?: string;
+    kit: string;
+    /** Vendors that do not keep environments apart yet. */
+    shared: string[];
+}
+
+/** The headers every lab API call carries: the token, and the environment when one is named. */
+export function labHeaders(token?: string, environment?: string): Record<string, string> {
+    return {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(environment ? { 'Lab-Environment': environment } : {}),
+    };
 }

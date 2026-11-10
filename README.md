@@ -175,6 +175,7 @@ them keeps working:
 | --- | --- | --- | --- |
 | `lab_url` | `FINTECH_SIM_LAB_URL` | `http://127.0.0.1:8097` | the platform → the lab API: registration, the clock, `LabClient` |
 | `lab_token` | `FINTECH_SIM_LAB_TOKEN`, else the lab's own `LAB_API_TOKEN` | none | sent as `Authorization: Bearer …` when the lab asks for one. Better in the environment than in a file |
+| `lab_environment` | `FINTECH_SIM_LAB_ENVIRONMENT` | none (the default environment) | sent as `Lab-Environment`: which environment the platform is in, when the token is the lab's admin token. An environment's own token names it already — see below |
 | `clock_url` | `FINTECH_SIM_LAB_CLOCK_URL` | `{lab_url}/v1/clock` | the platform → the clock. Set it only to follow the clock service itself (`http://127.0.0.1:8096/clock`), as against a lab without the lab API |
 | `console_url` | `FINTECH_SIM_LAB_CONSOLE_URL` | `http://127.0.0.1:8090` | only for a lab without the lab API: `new LabPlugin({ consoleUrl })` registers at its `/api/plugins` |
 | `advertised_url` | `RUNNER_ADVERTISED_URL` | `defaults.advertisedUrl` | the console → the platform (`base_url`) |
@@ -227,6 +228,35 @@ const standIns = lab.file
     ? mergeStandIns({ receiver: { connected: false, shown: false } }, lab.standIns)
     : undefined;
 ```
+
+## Environments
+
+A lab can serve several platforms at once — a deployed stack, a laptop, an
+e2e run — each in an **environment** of its own (the lab's
+`docs/lab-api/environments.md`). An environment has its own token on the
+lab API and its own logins at every vendor, so nothing one platform does
+shows up in another's view, and a reset clears only its own records.
+
+For a platform, joining one is its kit: the `.env` the lab hands out for
+it (the console's *Environments* view, or `GET /v1/connect/env` with its
+token). It holds the environment's own Banking Circle login and
+safeguarding accounts, its B4B signing key, its SFTP user — and
+`FINTECH_SIM_LAB_URL`, `FINTECH_SIM_LAB_TOKEN` and
+`FINTECH_SIM_LAB_ENVIRONMENT`, which `loadLabConfig()` reads. Nothing else
+changes: `LabClient`, `LabPlugin` and the clock follower send the token,
+and the lab knows the environment from it.
+
+- **The default environment** is the lab as it always was: its built-in
+  logins and the stand-ins. A runner with the lab's admin token (or none,
+  on an open lab) and no `lab_environment` is in it.
+- **Registering a card is optional.** An environment is green in the
+  console once a vendor has seen its platform log in; a card is for a
+  platform that brings buttons, settlement files or logs. It shows under
+  its environment, and only the default environment's card can switch the
+  stand-ins (`stand_ins`), which are the default's.
+- `LabClient` has `environment()`, `environments()`, `kit(host)`, and, for
+  the admin token, `createEnvironment()` and `deleteEnvironment()`: an e2e
+  run can make an environment of its own and drop it after.
 
 ## Linking it into a platform
 

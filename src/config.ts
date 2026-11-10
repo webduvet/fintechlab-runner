@@ -9,8 +9,9 @@
  *     and are what a .env already carries.
  *
  *   {
- *     "lab_url":        "http://127.0.0.1:8097",
- *     "lab_token":      "…",
+ *     "lab_url":         "http://127.0.0.1:8097",
+ *     "lab_token":       "…",
+ *     "lab_environment": "default",
  *     "advertised_url": "http://host.containers.internal:3109",
  *     "browse_url":     "http://127.0.0.1:3109",
  *     "stand_ins": {"receiver": {"connected": false, "shown": false}}
@@ -20,6 +21,13 @@
  * (/v1/plugins), follows the clock there (/v1/clock), and sends the token
  * there when the lab asks for one. console_url and clock_url are for a lab
  * without the lab API; clock_url, when set, still names the clock to follow.
+ *
+ * A lab that serves several platforms keeps each in an environment of its
+ * own (the lab's docs/lab-api/environments.md). An environment's token
+ * (its kit's FINTECH_SIM_LAB_TOKEN) is all a platform needs: the lab knows
+ * the environment from it. lab_environment names one when the token is the
+ * lab's admin token; with an environment's token it must be that one, or
+ * be left out.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -39,6 +47,7 @@ export const CONFIG_ENV = {
     file: 'FINTECHLAB_CONFIG',
     labUrl: 'FINTECH_SIM_LAB_URL',
     labToken: 'FINTECH_SIM_LAB_TOKEN',
+    labEnvironment: 'FINTECH_SIM_LAB_ENVIRONMENT',
     consoleUrl: 'FINTECH_SIM_LAB_CONSOLE_URL',
     clockUrl: 'FINTECH_SIM_LAB_CLOCK_URL',
     advertisedUrl: 'RUNNER_ADVERTISED_URL',
@@ -56,6 +65,7 @@ export const LAB_TOKEN_FALLBACK_ENV = 'LAB_API_TOKEN';
 export interface LabConfigFile {
     lab_url?: string;
     lab_token?: string;
+    lab_environment?: string;
     console_url?: string;
     clock_url?: string;
     advertised_url?: string;
@@ -68,6 +78,12 @@ export interface LabConfig {
     labUrl: string;
     /** Sent as `Authorization: Bearer …` to the lab API, when the lab asks for one. */
     token?: string;
+    /**
+     * The environment the platform is in, sent as `Lab-Environment`: needed
+     * only with the lab's admin token, since an environment's own token
+     * names its environment itself.
+     */
+    environment?: string;
     /**
      * The clock to follow: the lab API's /v1/clock, unless clock_url names
      * the clock service itself (a lab without the lab API).
@@ -99,6 +115,7 @@ export interface LoadLabConfigOptions {
 const FILE_FIELDS: Record<string, true> = {
     lab_url: true,
     lab_token: true,
+    lab_environment: true,
     console_url: true,
     clock_url: true,
     advertised_url: true,
@@ -160,9 +177,11 @@ export function loadLabConfig(options: LoadLabConfigOptions = {}): LabConfig {
     const browseUrl = pick(CONFIG_ENV.browseUrl, file.browse_url, d.browseUrl);
     const labUrl = trimSlash(pick(CONFIG_ENV.labUrl, file.lab_url, d.labUrl) ?? DEFAULT_LAB_URL);
     const token = fromEnv(CONFIG_ENV.labToken) ?? fromEnv(LAB_TOKEN_FALLBACK_ENV) ?? (file.lab_token || undefined);
+    const environment = pick(CONFIG_ENV.labEnvironment, file.lab_environment, undefined);
     return {
         labUrl,
         ...(token ? { token } : {}),
+        ...(environment ? { environment } : {}),
         clockUrl: trimSlash(pick(CONFIG_ENV.clockUrl, file.clock_url, d.clockUrl) ?? `${labUrl}/v1/clock`),
         consoleUrl: trimSlash(pick(CONFIG_ENV.consoleUrl, file.console_url, d.consoleUrl) ?? DEFAULT_CONSOLE_URL),
         ...(advertisedUrl ? { advertisedUrl } : {}),

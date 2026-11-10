@@ -18,6 +18,7 @@
  */
 
 import { validateDescriptor, type Plugin, type RegisterResponse } from './descriptor';
+import { labHeaders } from './lab';
 import { errorMessage, sleep, trimSlash, type Fetch, type Logger } from './util';
 
 export interface LabPluginOptions {
@@ -27,6 +28,13 @@ export interface LabPluginOptions {
     consoleUrl?: string;
     /** The lab's token (LabConfig.token), when it asks for one. */
     token?: string;
+    /**
+     * The environment the card is registered in (LabConfig.environment),
+     * for the admin token; an environment's token names its own. A card is
+     * its environment's: the console shows it there, and only the default
+     * environment's card can switch the lab's stand-ins.
+     */
+    environment?: string;
     /**
      * The descriptor, or a function building it. A function is called on
      * every renewal, so a changed descriptor reaches the console within one
@@ -74,7 +82,7 @@ export class LabPlugin {
         if (options.labUrl) this.pluginsUrl = `${trimSlash(options.labUrl)}/v1/plugins`;
         else if (options.consoleUrl) this.pluginsUrl = `${trimSlash(options.consoleUrl)}/api/plugins`;
         else throw new Error('LabPlugin needs labUrl (or, for a lab without the lab API, consoleUrl)');
-        this.headers = options.token ? { Authorization: `Bearer ${options.token}` } : {};
+        this.headers = labHeaders(options.token, options.environment);
         const d = options.descriptor;
         this.build = typeof d === 'function' ? d : () => d;
         this.fetch = options.fetch ?? ((input, init) => fetch(input, init));
